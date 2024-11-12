@@ -7,6 +7,8 @@ const bodyParser = require("body-parser");
 const PORT = process.env.SERVER_PORT || 3000;
 const SHIELD_FORWARD_URLS = process.env.SHIELD_FORWARD_URLS;
 const FEE_PK = process.env.FEE_PRIVATE_KEY;
+const PARALLEL_CALL = process.env.PARALLEL_CALL=="true";
+
 const { confirmResponse, muonFeeSignature } = require("./utils/muon-helpers");
 global.MuonAppUtils = require("./muonapp-utils");
 
@@ -61,19 +63,33 @@ router.use("*", async (req, res, next) => {
   
   if (forwardUrls.length == 0) forwardUrls = originalForwardUrls;
 
-  let forwardUrl = forwardUrls[0];
-
-  const result = await axios
-    .post(forwardUrl, requestData)
-    .then(({ data }) => data)
-    .catch((error) => {
-      if (error.code === "ECONNREFUSED" || error.code === "ECONNABORTED")
-        forwardUrls.shift();
-      return res.json({
-        success: false,
-        error,
+  let result;
+  if(PARALLEL_CALL && forwardUrls.length > 1){
+    result = await Promise.any(
+        forwardUrls.map(api => {
+          return axios.post(api, requestData)
+            .then(({data}) => {
+              //TODO: filter invalid responses
+              return data;
+            })
+        })
+      ).catch(e => {
+        console.log(e);
+      })
+  }else{
+    let forwardUrl = forwardUrls[0];
+    result = await axios
+      .post(forwardUrl, requestData)
+      .then(({ data }) => data)
+      .catch((error) => {
+        if (error.code === "ECONNREFUSED" || error.code === "ECONNABORTED")
+          forwardUrls.shift();
+        return res.json({
+          success: false,
+          error,
+        });
       });
-    });
+  }
 
   if (result.success) {
     try {
@@ -86,7 +102,6 @@ router.use("*", async (req, res, next) => {
       });
     }
   }
-  // console.log(result);
   return res.json(result);
 });
 
